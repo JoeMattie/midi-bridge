@@ -233,13 +233,19 @@ class MidiEngine:
     def _build_output_message(self, mapping: Mapping, incoming: mido.Message) -> mido.Message | None:
         ch = mapping.output_channel - 1  # mido is 0-based
         otype = mapping.output_type
+
+        if mapping.output_value_mode == "passthrough":
+            value = self._extract_input_value(incoming)
+        else:
+            value = mapping.output_value
+
         try:
             if otype == "control_change":
-                return mido.Message("control_change", channel=ch, control=mapping.output_control, value=mapping.output_value)
+                return mido.Message("control_change", channel=ch, control=mapping.output_control, value=value)
             elif otype == "program_change":
-                return mido.Message("program_change", channel=ch, program=mapping.output_value)
+                return mido.Message("program_change", channel=ch, program=value)
             elif otype == "note_on":
-                return mido.Message("note_on", channel=ch, note=mapping.output_control, velocity=mapping.output_value)
+                return mido.Message("note_on", channel=ch, note=mapping.output_control, velocity=value)
             elif otype == "note_off":
                 return mido.Message("note_off", channel=ch, note=mapping.output_control, velocity=0)
             elif otype == "sysex":
@@ -248,6 +254,17 @@ class MidiEngine:
         except Exception as exc:
             print(f"[engine] build message error: {exc}")
         return None
+
+    @staticmethod
+    def _extract_input_value(msg: mido.Message) -> int:
+        t = msg.type
+        if t == "program_change":
+            return msg.program
+        elif t == "control_change":
+            return msg.value
+        elif t in ("note_on", "note_off"):
+            return msg.velocity
+        return 0
 
     def _build_zero_message(self, mapping: Mapping) -> mido.Message | None:
         ch = mapping.output_channel - 1

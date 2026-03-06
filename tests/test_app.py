@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from textual.widgets import Button, DataTable, Input, Select, Switch
 
-from midi_bridge.app import DeviceModal, MappingModal, MidiBridgeApp
+from midi_bridge.app import DeviceModal, DeviceRow, MappingModal, MidiBridgeApp
 from midi_bridge.models import AppConfig, DeviceConfig, Mapping
 
 # ---------------------------------------------------------------------------
@@ -269,7 +269,8 @@ class TestDeviceModalSubmit:
                 await pilot.click("#ok")
                 await _pause(pilot, n=3)  # extra time for DeviceRow to mount
 
-                assert app.query_one("#del-dev-mypad", Button)
+                rows = app.query("DeviceRow")
+                assert any(r._dev_name == "mypad" for r in rows)
 
     async def test_adding_device_triggers_engine_reload(self, tmp_path):
         app = _make_app(tmp_path)
@@ -299,7 +300,9 @@ class TestDeviceDeletion:
             async with app.run_test() as pilot:
                 assert "pad" in app._config.devices
                 await _pause(pilot)  # let DeviceRow layout settle after mount
-                await pilot.click("#del-dev-pad")
+                row = next(r for r in app.query(DeviceRow) if r._dev_name == "pad")
+                btn = row.query_one(".del-btn", Button)
+                btn.press()
                 await _pause(pilot)
                 assert "pad" not in app._config.devices
 
@@ -308,7 +311,9 @@ class TestDeviceDeletion:
         with patch(_PATCH_IN, return_value=FAKE_PORTS), patch(_PATCH_OUT, return_value=FAKE_PORTS):
             async with app.run_test() as pilot:
                 await _pause(pilot)  # let DeviceRow layout settle after mount
-                await pilot.click("#del-dev-pad")
+                row = next(r for r in app.query(DeviceRow) if r._dev_name == "pad")
+                btn = row.query_one(".del-btn", Button)
+                btn.press()
                 await _pause(pilot)
                 app._engine.reload.assert_called()
 
@@ -317,7 +322,9 @@ class TestDeviceDeletion:
         with patch(_PATCH_IN, return_value=FAKE_PORTS), patch(_PATCH_OUT, return_value=FAKE_PORTS):
             async with app.run_test() as pilot:
                 await _pause(pilot)  # let DeviceRow layout settle after mount
-                await pilot.click("#del-dev-pad")
+                row = next(r for r in app.query(DeviceRow) if r._dev_name == "pad")
+                btn = row.query_one(".del-btn", Button)
+                btn.press()
                 await _pause(pilot)
                 assert "synth" in app._config.devices
 

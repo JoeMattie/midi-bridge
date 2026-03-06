@@ -4,6 +4,7 @@ from typing import Literal
 
 MessageType = Literal["program_change", "control_change", "note_on", "note_off", "sysex"]
 Direction = Literal["input", "output"]
+ValueMode = Literal["fixed", "passthrough"]
 
 
 @dataclass
@@ -25,6 +26,7 @@ class Mapping:
     output_channel: int = 1
     output_control: int = 0        # CC number for CC output
     output_value: int = 127
+    output_value_mode: ValueMode = "fixed"
     momentary: bool = False
     momentary_delay_ms: int = 100
 

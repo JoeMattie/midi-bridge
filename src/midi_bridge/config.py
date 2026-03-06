@@ -33,6 +33,7 @@ def load_config(path: Path) -> AppConfig:
             output_channel=m.get("output_channel", 1),
             output_control=m.get("output_control", 0),
             output_value=m.get("output_value", 127),
+            output_value_mode=m.get("output_value_mode", "fixed"),
             momentary=m.get("momentary", False),
             momentary_delay_ms=m.get("momentary_delay_ms", 100),
         ))
@@ -62,6 +63,7 @@ def save_config(config: AppConfig, path: Path) -> None:
                 "output_channel": m.output_channel,
                 "output_control": m.output_control,
                 "output_value": m.output_value,
+                "output_value_mode": m.output_value_mode,
                 "momentary": m.momentary,
                 "momentary_delay_ms": m.momentary_delay_ms,
             }
