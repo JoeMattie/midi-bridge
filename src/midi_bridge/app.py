@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import cast
 
 import mido
-from textual import on
+from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, ScrollableContainer
@@ -63,33 +63,50 @@ class DeviceModal(ModalScreen[DeviceConfig | None]):
     def __init__(self, existing: DeviceConfig | None = None) -> None:
         super().__init__()
         self._existing = existing
+        self._all_in = list_input_ports()
+        self._all_out = list_output_ports()
+
+    def _port_options(self, direction: str) -> list[tuple[str, str]]:
+        ports = self._all_in if direction == "input" else self._all_out
+        return [(p, p) for p in ports] if ports else [("(no ports found)", "")]
 
     def compose(self) -> ComposeResult:
         dev = self._existing
-        all_in = list_input_ports()
-        all_out = list_output_ports()
-        all_ports = sorted(set(all_in + all_out))
-
-        port_options = [(p, p) for p in all_ports] if all_ports else [("(no ports found)", "")]
+        initial_direction = dev.direction if dev else "input"
+        port_options = self._port_options(initial_direction)
 
         with Vertical():
             yield Label("Device Name", classes="field-label")
             yield Input(value=dev.name if dev else "", id="dev-name", placeholder="e.g. launchpad")
-            yield Label("Port", classes="field-label")
-            yield Select(port_options, value=dev.port if dev else Select.BLANK, id="dev-port", allow_blank=True)
             yield Label("Direction", classes="field-label")
             with RadioSet(id="dev-direction"):
                 yield RadioButton("Input", value=not dev or dev.direction == "input", id="dir-input")
                 yield RadioButton("Output", value=bool(dev and dev.direction == "output"), id="dir-output")
+            yield Label("Port", classes="field-label")
+            yield Select(port_options, value=dev.port if dev else Select.NULL, id="dev-port", allow_blank=True)
             with Horizontal(classes="buttons"):
                 yield Button("OK", variant="primary", id="ok")
                 yield Button("Cancel", id="cancel")
+
+    @on(RadioSet.Changed, "#dev-direction")
+    def _direction_changed(self, event: RadioSet.Changed) -> None:
+        direction = "input" if event.radio_set.pressed_index == 0 else "output"
+        self.query_one("#dev-port", Select).set_options(self._port_options(direction))
+
+    @on(Select.Changed, "#dev-port")
+    def _port_selected(self, event: Select.Changed) -> None:
+        if event.value and event.value != Select.NULL:
+            name_input = self.query_one("#dev-name", Input)
+            if not name_input.value.strip():
+                # Sanitize: widget IDs may only contain letters, digits, hyphens, underscores
+                import re
+                name_input.value = re.sub(r"[^a-zA-Z0-9_-]", "-", str(event.value))
 
     @on(Button.Pressed, "#ok")
     def _ok(self) -> None:
         name = self.query_one("#dev-name", Input).value.strip()
         port_widget = self.query_one("#dev-port", Select)
-        port = port_widget.value if port_widget.value != Select.BLANK else ""
+        port = port_widget.value if port_widget.value != Select.NULL else ""
         radio = self.query_one("#dev-direction", RadioSet)
         direction = "input" if radio.pressed_index == 0 else "output"
 
@@ -154,7 +171,7 @@ class MappingModal(ModalScreen[Mapping | None]):
 
             with ScrollableContainer():
                 yield Label("Input Device", classes="field-label")
-                yield Select(in_opts, value=m.input_device if m else Select.BLANK, id="map-in-device", allow_blank=True)
+                yield Select(in_opts, value=m.input_device if m else Select.NULL, id="map-in-device", allow_blank=True)
 
                 yield Label("Input Type", classes="field-label")
                 yield Select(MESSAGE_TYPES, value=m.input_type if m else "program_change", id="map-in-type")
@@ -166,7 +183,7 @@ class MappingModal(ModalScreen[Mapping | None]):
                 yield Input(value=str(m.input_value if m else -1), id="map-in-val")
 
                 yield Label("Output Device", classes="field-label")
-                yield Select(out_opts, value=m.output_device if m else Select.BLANK, id="map-out-device", allow_blank=True)
+                yield Select(out_opts, value=m.output_device if m else Select.NULL, id="map-out-device", allow_blank=True)
 
                 yield Label("Output Type", classes="field-label")
                 yield Select(MESSAGE_TYPES, value=m.output_type if m else "control_change", id="map-out-type")
@@ -210,7 +227,7 @@ class MappingModal(ModalScreen[Mapping | None]):
 
         def _select(widget_id: str) -> str:
             v = self.query_one(widget_id, Select).value
-            return v if v != Select.BLANK else ""
+            return v if v != Select.NULL else ""
 
         name = self.query_one("#map-name", Input).value.strip()
         momentary = self.query_one("#map-momentary", Switch).value
@@ -234,6 +251,30 @@ class MappingModal(ModalScreen[Mapping | None]):
     @on(Button.Pressed, "#cancel")
     def _cancel(self) -> None:
         self.dismiss(None)
+
+
+# ---------------------------------------------------------------------------
+# Device Row
+# ---------------------------------------------------------------------------
+
+class DeviceRow(Horizontal):
+    DEFAULT_CSS = """
+    DeviceRow {
+        height: 1;
+        margin: 0;
+    }
+    DeviceRow Label { width: 1fr; }
+    DeviceRow Button { min-width: 3; height: 1; }
+    """
+
+    def __init__(self, name: str, dev: DeviceConfig) -> None:
+        super().__init__(classes="device-row")
+        self._dev_name = name
+        self._dev = dev
+
+    def compose(self) -> ComposeResult:
+        yield Label(f"{self._dev_name}  [{self._dev.direction}]")
+        yield Button("X", id=f"del-dev-{self._dev_name}", classes="del-btn", variant="error")
 
 
 # ---------------------------------------------------------------------------
@@ -274,12 +315,7 @@ class DevicePanel(Vertical):
         device_list = self.query_one("#device-list", Vertical)
         device_list.remove_children()
         for name, dev in config.devices.items():
-            row = Horizontal(classes="device-row")
-            row.compose = lambda n=name, d=dev: [  # type: ignore[method-assign]
-                Label(f"{n}  [{d.direction}]"),
-                Button("X", id=f"del-dev-{n}", classes="del-btn", variant="error"),
-            ]
-            device_list.mount(row)
+            device_list.mount(DeviceRow(name, dev))
 
 
 # ---------------------------------------------------------------------------
@@ -458,6 +494,7 @@ class MidiBridgeApp(App):
     # ------------------------------------------------------------------
 
     @on(Button.Pressed, "#add-device")
+    @work
     async def _add_device(self) -> None:
         result: DeviceConfig | None = await self.push_screen_wait(DeviceModal())
         if result is None:
@@ -467,6 +504,7 @@ class MidiBridgeApp(App):
         self._update_config(AppConfig(devices=new_devices, mappings=list(self._config.mappings)))
 
     @on(Button.Pressed, "#add-mapping")
+    @work
     async def _add_mapping(self) -> None:
         result: Mapping | None = await self.push_screen_wait(MappingModal(self._config))
         if result is None:
@@ -484,6 +522,7 @@ class MidiBridgeApp(App):
             self._update_config(AppConfig(devices=new_devices, mappings=list(self._config.mappings)))
 
     @on(DataTable.CellSelected, "#mapping-table")
+    @work
     async def _mapping_table_cell(self, event: DataTable.CellSelected) -> None:
         table = self.query_one("#mapping-table", DataTable)
         row_key = event.cell_key.row_key.value
