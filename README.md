@@ -2,6 +2,8 @@
 
 A terminal UI for routing and transforming MIDI messages between devices. Define mappings (e.g. Program Change in → CC out, with optional momentary behaviour) that run live while the app is open. Config is persisted to a human-readable TOML file.
 
+![Main UI showing devices, mappings, and MIDI monitor](docs/screenshots/main.png)
+
 ## Requirements
 
 - Python 3.11+
@@ -28,23 +30,27 @@ On first launch the app opens with no devices or mappings configured.
 
 ### Adding a device
 
-1. Click **[+] Add Device** in the Devices panel.
+1. Click **[+] Add** in the Devices panel header.
 2. Enter a short name (used to reference this device in mappings).
 3. Select the MIDI port from the dropdown — only ports currently visible to the OS appear.
 4. Choose **Input** or **Output** and press **OK**.
+
+![Add Device dialog](docs/screenshots/add-device.png)
 
 The engine opens the port immediately; no restart needed.
 
 ### Adding a mapping
 
-1. Click **[+] Add Mapping** in the Mappings panel.
+1. Click **[+] Add** in the Mappings panel header.
 2. Fill in the form:
    - **Input Device / Type / Channel / Value** — what to listen for (`-1` in the value field matches any value)
    - **Output Device / Type / Channel / Control / Value** — what to send
    - **Momentary** — if enabled, a follow-up zero-value message is sent after the configured delay
-3. Press **OK**.
+3. Press **OK**. Use **Listen for MIDI…** to auto-fill the input fields from the next incoming message.
 
-Click **[Edit]** or **[X]** in the mappings table to modify or remove a mapping. Changes take effect instantly.
+![Add Mapping dialog](docs/screenshots/add-mapping.png)
+
+Click **Edit** or **✕** on any mapping row to modify or remove it. Changes take effect instantly.
 
 ### Saving
 
