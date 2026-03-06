@@ -1,0 +1,21 @@
+[project]
+name = "midi-bridge"
+version = "0.1.0"
+description = "MIDI routing and transformation TUI"
+requires-python = ">=3.11"
+dependencies = [
+    "mido>=1.3.2",
+    "python-rtmidi>=1.5.8",
+    "textual>=0.89.0",
+    "tomli-w>=1.1.0",
+]
+
+[project.scripts]
+midi-bridge = "midi_bridge.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/midi_bridge"]
