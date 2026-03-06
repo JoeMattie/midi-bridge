@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 from typing import cast
@@ -8,7 +9,7 @@ import mido
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, ScrollableContainer
+from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
@@ -37,6 +38,14 @@ MESSAGE_TYPES = [
     ("sysex", "sysex"),
 ]
 
+_TYPE_ABBR = {
+    "program_change": "PC",
+    "control_change": "CC",
+    "note_on": "note_on",
+    "note_off": "note_off",
+    "sysex": "sysex",
+}
+
 
 # ---------------------------------------------------------------------------
 # Device Modal
@@ -44,21 +53,6 @@ MESSAGE_TYPES = [
 
 class DeviceModal(ModalScreen[DeviceConfig | None]):
     """Add / edit a device."""
-
-    DEFAULT_CSS = """
-    DeviceModal {
-        align: center middle;
-    }
-    DeviceModal > Vertical {
-        background: $surface;
-        border: thick $primary;
-        padding: 1 2;
-        width: 60;
-        height: auto;
-    }
-    DeviceModal .field-label { margin-top: 1; }
-    DeviceModal .buttons { margin-top: 1; }
-    """
 
     def __init__(self, existing: DeviceConfig | None = None) -> None:
         super().__init__()
@@ -98,9 +92,7 @@ class DeviceModal(ModalScreen[DeviceConfig | None]):
         if event.value and event.value != Select.NULL:
             name_input = self.query_one("#dev-name", Input)
             if not name_input.value.strip():
-                # Sanitize: widget IDs may only contain letters, digits, hyphens, underscores
-                import re
-                name_input.value = re.sub(r"[^a-zA-Z0-9_-]", "-", str(event.value))
+                name_input.value = str(event.value)
 
     @on(Button.Pressed, "#ok")
     def _ok(self) -> None:
@@ -127,26 +119,6 @@ class DeviceModal(ModalScreen[DeviceConfig | None]):
 class MappingModal(ModalScreen[Mapping | None]):
     """Add / edit a mapping."""
 
-    DEFAULT_CSS = """
-    MappingModal {
-        align: center middle;
-    }
-    MappingModal > Vertical {
-        background: $surface;
-        border: thick $primary;
-        padding: 1 2;
-        width: 70;
-        height: auto;
-        max-height: 90vh;
-    }
-    MappingModal ScrollableContainer { height: 1fr; }
-    MappingModal .field-label { margin-top: 1; }
-    MappingModal .buttons { margin-top: 1; }
-    MappingModal .row { height: auto; }
-    MappingModal #momentary-section { display: none; }
-    MappingModal #momentary-section.visible { display: block; }
-    """
-
     def __init__(self, config: AppConfig, existing: Mapping | None = None) -> None:
         super().__init__()
         self._config = config
@@ -164,50 +136,113 @@ class MappingModal(ModalScreen[Mapping | None]):
         m = self._existing
         in_opts = self._device_options("input")
         out_opts = self._device_options("output")
+        in_val = m.input_device if m and m.input_device in dict(in_opts) else Select.NULL
+        out_val = m.output_device if m and m.output_device in dict(out_opts) else Select.NULL
 
         with Vertical():
-            yield Label("Mapping Name", classes="field-label")
-            yield Input(value=m.name if m else "", id="map-name", placeholder="e.g. Patch select -> CC")
+            # -- Name + Listen row --
+            with Horizontal(classes="top-row"):
+                with Vertical():
+                    yield Label("Mapping Name", classes="field-label")
+                    yield Input(value=m.name if m else "", id="map-name", placeholder="e.g. Patch select → CC")
+                yield Button("Listen for MIDI…", id="listen-btn", variant="warning")
 
-            with ScrollableContainer():
-                yield Label("Input Device", classes="field-label")
-                yield Select(in_opts, value=m.input_device if m else Select.NULL, id="map-in-device", allow_blank=True)
+            # -- Two-column layout: Input | Output --
+            with Horizontal(classes="columns"):
+                with Vertical(classes="col"):
+                    yield Static("Input", classes="col-title")
+                    yield Label("Device", classes="field-label")
+                    yield Select(in_opts, value=in_val, id="map-in-device", allow_blank=True)
+                    yield Label("Type", classes="field-label")
+                    yield Select(MESSAGE_TYPES, value=m.input_type if m else "program_change", id="map-in-type")
+                    yield Label("Channel (1–16)", classes="field-label")
+                    yield Input(value=str(m.input_channel if m else 1), id="map-in-ch")
+                    yield Label("Value (-1 = any)", classes="field-label")
+                    yield Input(value=str(m.input_value if m else -1), id="map-in-val")
 
-                yield Label("Input Type", classes="field-label")
-                yield Select(MESSAGE_TYPES, value=m.input_type if m else "program_change", id="map-in-type")
+                with Vertical(classes="col"):
+                    yield Static("Output", classes="col-title")
+                    yield Label("Device", classes="field-label")
+                    yield Select(out_opts, value=out_val, id="map-out-device", allow_blank=True)
+                    yield Label("Type", classes="field-label")
+                    yield Select(MESSAGE_TYPES, value=m.output_type if m else "control_change", id="map-out-type")
+                    yield Label("Channel (1–16)", classes="field-label")
+                    yield Input(value=str(m.output_channel if m else 1), id="map-out-ch")
+                    yield Label("Control / Note #", classes="field-label")
+                    yield Input(value=str(m.output_control if m else 0), id="map-out-ctrl")
+                    yield Label("Value", classes="field-label")
+                    with RadioSet(id="map-out-val-mode"):
+                        yield RadioButton("Fixed", value=not m or m.output_value_mode == "fixed", id="val-fixed")
+                        yield RadioButton("Pass through", value=bool(m and m.output_value_mode == "passthrough"), id="val-passthrough")
+                    with Vertical(id="fixed-value-section", classes="visible" if (not m or m.output_value_mode == "fixed") else ""):
+                        yield Input(value=str(m.output_value if m else 127), id="map-out-val")
 
-                yield Label("Input Channel (1–16)", classes="field-label")
-                yield Input(value=str(m.input_channel if m else 1), id="map-in-ch")
-
-                yield Label("Input Value (-1 = any)", classes="field-label")
-                yield Input(value=str(m.input_value if m else -1), id="map-in-val")
-
-                yield Label("Output Device", classes="field-label")
-                yield Select(out_opts, value=m.output_device if m else Select.NULL, id="map-out-device", allow_blank=True)
-
-                yield Label("Output Type", classes="field-label")
-                yield Select(MESSAGE_TYPES, value=m.output_type if m else "control_change", id="map-out-type")
-
-                yield Label("Output Channel (1–16)", classes="field-label")
-                yield Input(value=str(m.output_channel if m else 1), id="map-out-ch")
-
-                yield Label("Output Control / Note number", classes="field-label")
-                yield Input(value=str(m.output_control if m else 0), id="map-out-ctrl")
-
-                yield Label("Output Value", classes="field-label")
-                yield Input(value=str(m.output_value if m else 127), id="map-out-val")
-
-                with Horizontal(classes="row"):
-                    yield Label("Momentary: ", classes="field-label")
-                    yield Switch(value=m.momentary if m else False, id="map-momentary")
-
-                with Vertical(id="momentary-section", classes="visible" if (m and m.momentary) else ""):
-                    yield Label("Momentary Delay (ms)", classes="field-label")
-                    yield Input(value=str(m.momentary_delay_ms if m else 100), id="map-delay")
+            # -- Momentary row --
+            with Horizontal(classes="momentary-row"):
+                yield Label("Momentary: ", classes="field-label")
+                yield Switch(value=m.momentary if m else False, id="map-momentary")
+            with Vertical(id="momentary-section", classes="visible" if (m and m.momentary) else ""):
+                yield Label("Delay (ms)", classes="field-label")
+                yield Input(value=str(m.momentary_delay_ms if m else 100), id="map-delay")
 
             with Horizontal(classes="buttons"):
                 yield Button("OK", variant="primary", id="ok")
                 yield Button("Cancel", id="cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#listen-btn", Button).tooltip = (
+            "Click to capture the next incoming MIDI event and auto-fill the input fields"
+        )
+
+    @on(Button.Pressed, "#listen-btn")
+    @work
+    async def _listen(self) -> None:
+        btn = self.query_one("#listen-btn", Button)
+        btn.label = "Waiting for MIDI input…"
+        btn.disabled = True
+        try:
+            app = cast(MidiBridgeApp, self.app)
+            event = await app.listen_for_event()
+            self._populate_from_event(event)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            btn.label = "Listen for MIDI…"
+            btn.disabled = False
+
+    def _populate_from_event(self, event: MidiEvent) -> None:
+        msg = event.message
+        t = msg.type
+
+        # Input device
+        in_select = self.query_one("#map-in-device", Select)
+        in_opts = dict(self._device_options("input"))
+        if event.device_name in in_opts:
+            in_select.value = event.device_name
+
+        # Input type
+        if t in ("program_change", "control_change", "note_on", "note_off", "sysex"):
+            self.query_one("#map-in-type", Select).value = t
+
+        # Input channel
+        if hasattr(msg, "channel"):
+            self.query_one("#map-in-ch", Input).value = str(msg.channel + 1)
+
+        # Input value
+        if t == "program_change":
+            self.query_one("#map-in-val", Input).value = str(msg.program)
+        elif t == "control_change":
+            self.query_one("#map-in-val", Input).value = str(msg.control)
+        elif t in ("note_on", "note_off"):
+            self.query_one("#map-in-val", Input).value = str(msg.note)
+
+    @on(RadioSet.Changed, "#map-out-val-mode")
+    def _toggle_value_mode(self, event: RadioSet.Changed) -> None:
+        section = self.query_one("#fixed-value-section")
+        if event.radio_set.pressed_index == 0:  # Fixed
+            section.add_class("visible")
+        else:
+            section.remove_class("visible")
 
     @on(Switch.Changed, "#map-momentary")
     def _toggle_momentary(self, event: Switch.Changed) -> None:
@@ -231,6 +266,8 @@ class MappingModal(ModalScreen[Mapping | None]):
 
         name = self.query_one("#map-name", Input).value.strip()
         momentary = self.query_one("#map-momentary", Switch).value
+        val_mode_radio = self.query_one("#map-out-val-mode", RadioSet)
+        output_value_mode = "fixed" if val_mode_radio.pressed_index == 0 else "passthrough"
 
         m = Mapping(
             name=name,
@@ -243,6 +280,7 @@ class MappingModal(ModalScreen[Mapping | None]):
             output_channel=_int("#map-out-ch", 1),
             output_control=_int("#map-out-ctrl", 0),
             output_value=_int("#map-out-val", 127),
+            output_value_mode=output_value_mode,
             momentary=momentary,
             momentary_delay_ms=_int("#map-delay", 100),
         )
@@ -250,6 +288,7 @@ class MappingModal(ModalScreen[Mapping | None]):
 
     @on(Button.Pressed, "#cancel")
     def _cancel(self) -> None:
+        cast(MidiBridgeApp, self.app).cancel_listen()
         self.dismiss(None)
 
 
@@ -258,15 +297,6 @@ class MappingModal(ModalScreen[Mapping | None]):
 # ---------------------------------------------------------------------------
 
 class DeviceRow(Horizontal):
-    DEFAULT_CSS = """
-    DeviceRow {
-        height: 1;
-        margin: 0;
-    }
-    DeviceRow Label { width: 1fr; }
-    DeviceRow Button { min-width: 3; height: 1; }
-    """
-
     def __init__(self, name: str, dev: DeviceConfig) -> None:
         super().__init__(classes="device-row")
         self._dev_name = name
@@ -274,7 +304,7 @@ class DeviceRow(Horizontal):
 
     def compose(self) -> ComposeResult:
         yield Label(f"{self._dev_name}  [{self._dev.direction}]")
-        yield Button("X", id=f"del-dev-{self._dev_name}", classes="del-btn", variant="error")
+        yield Button("✕", classes="del-btn", variant="error")
 
 
 # ---------------------------------------------------------------------------
@@ -282,30 +312,6 @@ class DeviceRow(Horizontal):
 # ---------------------------------------------------------------------------
 
 class DevicePanel(Vertical):
-    DEFAULT_CSS = """
-    DevicePanel {
-        border: solid $primary;
-        padding: 0 1;
-        width: 35;
-    }
-    DevicePanel .panel-title {
-        text-style: bold;
-        background: $primary;
-        padding: 0 1;
-    }
-    DevicePanel .device-row {
-        height: 1;
-        margin: 0;
-    }
-    DevicePanel .device-row Label {
-        width: 1fr;
-    }
-    DevicePanel Button.del-btn {
-        min-width: 3;
-        height: 1;
-    }
-    """
-
     def compose(self) -> ComposeResult:
         yield Static("Devices", classes="panel-title")
         yield Button("[+] Add Device", id="add-device", variant="success")
@@ -323,19 +329,6 @@ class DevicePanel(Vertical):
 # ---------------------------------------------------------------------------
 
 class MappingPanel(Vertical):
-    DEFAULT_CSS = """
-    MappingPanel {
-        border: solid $primary;
-        padding: 0 1;
-        width: 1fr;
-    }
-    MappingPanel .panel-title {
-        text-style: bold;
-        background: $primary;
-        padding: 0 1;
-    }
-    """
-
     def compose(self) -> ComposeResult:
         yield Static("Mappings", classes="panel-title")
         yield Button("[+] Add Mapping", id="add-mapping", variant="success")
@@ -343,7 +336,7 @@ class MappingPanel(Vertical):
 
     def on_mount(self) -> None:
         table = self.query_one("#mapping-table", DataTable)
-        table.add_columns("Name", "Input Device", "Output Device", "Type", "Edit", "Del")
+        table.add_columns("Name", "Input Device", "Output Device", "Type", "✏", "✕")
 
     def refresh_mappings(self, config: AppConfig) -> None:
         table = self.query_one("#mapping-table", DataTable)
@@ -353,7 +346,7 @@ class MappingPanel(Vertical):
                 m.name,
                 m.input_device,
                 m.output_device,
-                f"{m.input_type}→{m.output_type}",
+                f"{_TYPE_ABBR.get(m.input_type, m.input_type)}→{_TYPE_ABBR.get(m.output_type, m.output_type)}",
                 "[Edit]",
                 "[X]",
                 key=str(i),
@@ -365,22 +358,6 @@ class MappingPanel(Vertical):
 # ---------------------------------------------------------------------------
 
 class MonitorPanel(Vertical):
-    DEFAULT_CSS = """
-    MonitorPanel {
-        border: solid $primary;
-        height: 12;
-        padding: 0 1;
-    }
-    MonitorPanel .panel-title {
-        text-style: bold;
-        background: $primary;
-        padding: 0 1;
-    }
-    MonitorPanel RichLog {
-        height: 1fr;
-    }
-    """
-
     def compose(self) -> ComposeResult:
         yield Static("MIDI Monitor", classes="panel-title")
         yield RichLog(id="monitor-log", highlight=True, markup=True, auto_scroll=True)
@@ -427,25 +404,20 @@ def _format_msg(msg: mido.Message) -> str:
 
 class MidiBridgeApp(App):
     TITLE = "MIDI Bridge"
+    CSS_PATH = "app.tcss"
     BINDINGS = [
         Binding("s", "save_config", "Save"),
+        Binding("c", "clear_monitor", "Clear Monitor"),
         Binding("q", "quit", "Quit"),
     ]
-    CSS = """
-    Screen {
-        layout: vertical;
-    }
-    #top-row {
-        layout: horizontal;
-        height: 1fr;
-    }
-    """
 
     def __init__(self, config_path: Path) -> None:
         super().__init__()
         self._config_path = config_path
         self._config = load_config(config_path)
+        self.sub_title = str(config_path)
         self._engine = MidiEngine(self._config, self._on_midi_event)
+        self._listen_future: asyncio.Future[MidiEvent] | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -475,6 +447,24 @@ class MidiBridgeApp(App):
 
     def _post_midi_event(self, event: MidiEvent) -> None:
         self.query_one("#monitor-panel", MonitorPanel).log_event(event)
+        if (
+            event.direction == "IN"
+            and self._listen_future is not None
+            and not self._listen_future.done()
+        ):
+            self._listen_future.set_result(event)
+            self._listen_future = None
+
+    def listen_for_event(self) -> asyncio.Future[MidiEvent]:
+        """Return a Future that resolves on the next incoming MIDI event."""
+        loop = asyncio.get_running_loop()
+        self._listen_future = loop.create_future()
+        return self._listen_future
+
+    def cancel_listen(self) -> None:
+        if self._listen_future is not None and not self._listen_future.done():
+            self._listen_future.cancel()
+            self._listen_future = None
 
     # ------------------------------------------------------------------
     # Panel refresh helpers
@@ -512,12 +502,11 @@ class MidiBridgeApp(App):
         new_mappings = list(self._config.mappings) + [result]
         self._update_config(AppConfig(devices=dict(self._config.devices), mappings=new_mappings))
 
-    @on(Button.Pressed)
-    async def _handle_dynamic_buttons(self, event: Button.Pressed) -> None:
-        btn_id = event.button.id or ""
-
-        if btn_id.startswith("del-dev-"):
-            name = btn_id[len("del-dev-"):]
+    @on(Button.Pressed, ".del-btn")
+    async def _handle_delete_device(self, event: Button.Pressed) -> None:
+        row = event.button.parent
+        if isinstance(row, DeviceRow):
+            name = row._dev_name
             new_devices = {k: v for k, v in self._config.devices.items() if k != name}
             self._update_config(AppConfig(devices=new_devices, mappings=list(self._config.mappings)))
 
@@ -550,6 +539,9 @@ class MidiBridgeApp(App):
     def action_save_config(self) -> None:
         save_config(self._config, self._config_path)
         self.notify(f"Saved to {self._config_path}", title="Saved")
+
+    def action_clear_monitor(self) -> None:
+        self.query_one("#monitor-log", RichLog).clear()
 
     def action_quit(self) -> None:
         self.exit()

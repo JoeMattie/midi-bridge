@@ -1,0 +1,194 @@
+/* ================================================================
+   MIDI Bridge — TUI styles
+   ================================================================ */
+
+/* ----------------------------------------------------------------
+   App layout
+   ---------------------------------------------------------------- */
+
+Screen {
+    layout: vertical;
+}
+
+#top-row {
+    layout: horizontal;
+    height: 1fr;
+}
+
+/* ----------------------------------------------------------------
+   Shared panel components
+   ---------------------------------------------------------------- */
+
+.panel-title {
+    text-style: bold;
+    background: $primary;
+    color: $text;
+    padding: 0 1;
+    width: 1fr;
+}
+
+/* ----------------------------------------------------------------
+   Device Panel
+   ---------------------------------------------------------------- */
+
+DevicePanel {
+    border: solid $primary;
+    padding: 0 1;
+    width: 35;
+}
+
+DeviceRow {
+    height: 1;
+    margin: 0;
+}
+
+DeviceRow Label {
+    width: 1fr;
+}
+
+DeviceRow Button.del-btn {
+    min-width: 5;
+    height: 1;
+    border: none;
+    padding: 0 1;
+}
+
+/* ----------------------------------------------------------------
+   Mapping Panel
+   ---------------------------------------------------------------- */
+
+MappingPanel {
+    border: solid $primary;
+    padding: 0 1;
+    width: 1fr;
+}
+
+/* ----------------------------------------------------------------
+   Monitor Panel
+   ---------------------------------------------------------------- */
+
+MonitorPanel {
+    border: solid $primary;
+    height: 12;
+    padding: 0 1;
+}
+
+MonitorPanel RichLog {
+    height: 1fr;
+}
+
+/* ----------------------------------------------------------------
+   Device Modal
+   ---------------------------------------------------------------- */
+
+DeviceModal {
+    align: center middle;
+}
+
+DeviceModal > Vertical {
+    background: $surface;
+    border: thick $primary;
+    padding: 1 2;
+    width: 60;
+    height: auto;
+}
+
+DeviceModal .field-label {
+    margin-top: 1;
+    color: $text-muted;
+}
+
+DeviceModal .buttons {
+    margin-top: 1;
+}
+
+/* ----------------------------------------------------------------
+   Mapping Modal
+   ---------------------------------------------------------------- */
+
+MappingModal {
+    align: center middle;
+}
+
+MappingModal > Vertical {
+    background: $surface;
+    border: thick $primary;
+    padding: 1 2;
+    width: 90;
+    height: auto;
+    max-height: 90%;
+    overflow-y: auto;
+}
+
+MappingModal .top-row {
+    height: auto;
+}
+
+MappingModal .top-row > Vertical {
+    width: 1fr;
+    height: auto;
+}
+
+MappingModal .columns {
+    height: auto;
+}
+
+MappingModal .col {
+    width: 1fr;
+    height: auto;
+    padding: 0 1;
+}
+
+MappingModal .col-title {
+    text-style: bold;
+    background: $primary;
+    color: $text;
+    padding: 0 1;
+    margin-bottom: 1;
+}
+
+MappingModal .field-label {
+    margin-top: 1;
+    color: $text-muted;
+}
+
+MappingModal Input {
+    height: 3;
+}
+
+MappingModal .buttons {
+    margin-top: 1;
+    align-horizontal: center;
+    dock: bottom;
+    height: auto;
+    padding: 1 0;
+}
+
+MappingModal #listen-btn {
+    margin: 1 0 0 1;
+}
+
+MappingModal #fixed-value-section {
+    display: none;
+}
+
+MappingModal #fixed-value-section.visible {
+    display: block;
+}
+
+MappingModal #momentary-section {
+    display: none;
+}
+
+MappingModal #momentary-section.visible {
+    display: block;
+}
+
+MappingModal .momentary-row {
+    height: auto;
+    margin-top: 1;
+}
+
+MappingModal .momentary-row Label {
+    margin: 0;
+}
