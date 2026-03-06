@@ -19,12 +19,17 @@ Screen {
    Shared panel components
    ---------------------------------------------------------------- */
 
+.panel-header {
+    height: 1;
+    background: $primary;
+}
+
 .panel-title {
     text-style: bold;
-    background: $primary;
     color: $text;
     padding: 0 1;
     width: 1fr;
+    background: transparent;
 }
 
 /* ----------------------------------------------------------------
@@ -54,6 +59,19 @@ DeviceRow Button.del-btn {
 }
 
 /* ----------------------------------------------------------------
+   Add buttons (Device + Mapping panel headers)
+   ---------------------------------------------------------------- */
+
+#add-device,
+#add-mapping {
+    height: 1;
+    border: none;
+    padding: 0 1;
+    background: $success;
+    color: $text;
+}
+
+/* ----------------------------------------------------------------
    Mapping Panel
    ---------------------------------------------------------------- */
 
@@ -61,6 +79,43 @@ MappingPanel {
     border: solid $primary;
     padding: 0 1;
     width: 1fr;
+}
+
+.mapping-col-header {
+    height: 1;
+    background: $surface-lighten-1;
+}
+
+.mapping-row {
+    height: 1;
+}
+
+.map-col {
+    height: 1;
+}
+
+.map-col-name {
+    width: 2fr;
+}
+
+.map-col-device {
+    width: 2fr;
+}
+
+.map-col-type {
+    width: 10;
+}
+
+.map-action-spacer {
+    width: 16;
+}
+
+MappingPanel Button.map-edit-btn,
+MappingPanel Button.map-del-btn {
+    height: 1;
+    border: none;
+    padding: 0 1;
+    min-width: 6;
 }
 
 /* ----------------------------------------------------------------
@@ -90,7 +145,13 @@ DeviceModal > Vertical {
     border: thick $primary;
     padding: 1 2;
     width: 60;
-    height: auto;
+    max-height: 90%;
+}
+
+DeviceModal Select {
+    height: 3;
+    border: none;
+    padding: 0;
 }
 
 DeviceModal .field-label {
@@ -114,20 +175,10 @@ MappingModal > Vertical {
     background: $surface;
     border: thick $primary;
     padding: 1 2;
-    width: 90;
-    height: auto;
-    max-height: 90%;
-    overflow-y: auto;
+    width: 96;
+    height: 30;
 }
 
-MappingModal .top-row {
-    height: auto;
-}
-
-MappingModal .top-row > Vertical {
-    width: 1fr;
-    height: auto;
-}
 
 MappingModal .columns {
     height: auto;
@@ -152,20 +203,35 @@ MappingModal .field-label {
     color: $text-muted;
 }
 
+MappingModal Input,
+MappingModal Select {
+    margin: 0;
+}
+
 MappingModal Input {
     height: 3;
 }
 
 MappingModal .buttons {
-    margin-top: 1;
-    align-horizontal: center;
-    dock: bottom;
     height: auto;
-    padding: 1 0;
+    padding: 0 0 1 0;
+    align-vertical: middle;
+}
+
+MappingModal .buttons #map-name {
+    width: 1fr;
+    margin-right: 1;
+}
+
+MappingModal .listen-row {
+    height: 1;
+    align-horizontal: center;
+    margin-bottom: 1;
 }
 
 MappingModal #listen-btn {
-    margin: 1 0 0 1;
+    height: 1;
+    border: none;
 }
 
 MappingModal #fixed-value-section {
@@ -184,11 +250,23 @@ MappingModal #momentary-section.visible {
     display: block;
 }
 
-MappingModal .momentary-row {
+MappingModal .sub-row {
     height: auto;
-    margin-top: 1;
 }
 
-MappingModal .momentary-row Label {
-    margin: 0;
+MappingModal .half-col {
+    width: 1fr;
+    height: auto;
+    padding: 0 1;
 }
+
+MappingModal .third-col {
+    width: 1fr;
+    height: auto;
+    padding: 0;
+}
+
+MappingModal .momentary-col {
+    align-vertical: top;
+}
+

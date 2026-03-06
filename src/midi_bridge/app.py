@@ -9,11 +9,11 @@ import mido
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
-    DataTable,
     Footer,
     Header,
     Input,
@@ -31,19 +31,19 @@ from .engine import MidiEngine, MidiEvent, list_input_ports, list_output_ports
 from .models import AppConfig, DeviceConfig, Mapping, MessageType
 
 MESSAGE_TYPES = [
-    ("program_change", "program_change"),
-    ("control_change", "control_change"),
-    ("note_on", "note_on"),
-    ("note_off", "note_off"),
-    ("sysex", "sysex"),
+    ("PC", "program_change"),
+    ("CC", "control_change"),
+    ("Note On", "note_on"),
+    ("Note Off", "note_off"),
+    ("SysEx", "sysex"),
 ]
 
 _TYPE_ABBR = {
     "program_change": "PC",
     "control_change": "CC",
-    "note_on": "note_on",
-    "note_off": "note_off",
-    "sysex": "sysex",
+    "note_on": "Note On",
+    "note_off": "Note Off",
+    "sysex": "SysEx",
 }
 
 
@@ -53,6 +53,8 @@ _TYPE_ABBR = {
 
 class DeviceModal(ModalScreen[DeviceConfig | None]):
     """Add / edit a device."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
     def __init__(self, existing: DeviceConfig | None = None) -> None:
         super().__init__()
@@ -107,9 +109,12 @@ class DeviceModal(ModalScreen[DeviceConfig | None]):
 
         self.dismiss(DeviceConfig(name=name, port=port, direction=direction))
 
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
     @on(Button.Pressed, "#cancel")
     def _cancel(self) -> None:
-        self.dismiss(None)
+        self.action_cancel()
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +123,8 @@ class DeviceModal(ModalScreen[DeviceConfig | None]):
 
 class MappingModal(ModalScreen[Mapping | None]):
     """Add / edit a mapping."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
     def __init__(self, config: AppConfig, existing: Mapping | None = None) -> None:
         super().__init__()
@@ -139,12 +146,15 @@ class MappingModal(ModalScreen[Mapping | None]):
         in_val = m.input_device if m and m.input_device in dict(in_opts) else Select.NULL
         out_val = m.output_device if m and m.output_device in dict(out_opts) else Select.NULL
 
+        ok_disabled = not (m and m.name and m.input_device and m.output_device)
         with Vertical():
-            # -- Name + Listen row --
-            with Horizontal(classes="top-row"):
-                with Vertical():
-                    yield Label("Mapping Name", classes="field-label")
-                    yield Input(value=m.name if m else "", id="map-name", placeholder="e.g. Patch select → CC")
+            with Horizontal(classes="buttons"):
+                yield Input(value=m.name if m else "", id="map-name", placeholder="Mapping name…")
+                yield Button("OK", variant="primary", id="ok", disabled=ok_disabled)
+                yield Button("Cancel", id="cancel")
+
+            # -- Listen row (above both columns) --
+            with Horizontal(classes="listen-row"):
                 yield Button("Listen for MIDI…", id="listen-btn", variant="warning")
 
             # -- Two-column layout: Input | Output --
@@ -153,46 +163,69 @@ class MappingModal(ModalScreen[Mapping | None]):
                     yield Static("Input", classes="col-title")
                     yield Label("Device", classes="field-label")
                     yield Select(in_opts, value=in_val, id="map-in-device", allow_blank=True)
-                    yield Label("Type", classes="field-label")
-                    yield Select(MESSAGE_TYPES, value=m.input_type if m else "program_change", id="map-in-type")
-                    yield Label("Channel (1–16)", classes="field-label")
-                    yield Input(value=str(m.input_channel if m else 1), id="map-in-ch")
-                    yield Label("Value (-1 = any)", classes="field-label")
-                    yield Input(value=str(m.input_value if m else -1), id="map-in-val")
+                    with Horizontal(classes="sub-row"):
+                        with Vertical(classes="third-col"):
+                            yield Label("Type", classes="field-label")
+                            yield Select(MESSAGE_TYPES, value=m.input_type if m else "program_change", id="map-in-type")
+                        with Vertical(classes="third-col"):
+                            yield Label("Chan", classes="field-label")
+                            yield Input(value=str(m.input_channel if m else 1), id="map-in-ch")
+                        with Vertical(classes="third-col"):
+                            yield Label("Val (-1)", classes="field-label")
+                            yield Input(value=str(m.input_value if m else -1), id="map-in-val")
 
                 with Vertical(classes="col"):
                     yield Static("Output", classes="col-title")
                     yield Label("Device", classes="field-label")
                     yield Select(out_opts, value=out_val, id="map-out-device", allow_blank=True)
-                    yield Label("Type", classes="field-label")
-                    yield Select(MESSAGE_TYPES, value=m.output_type if m else "control_change", id="map-out-type")
-                    yield Label("Channel (1–16)", classes="field-label")
-                    yield Input(value=str(m.output_channel if m else 1), id="map-out-ch")
-                    yield Label("Control / Note #", classes="field-label")
-                    yield Input(value=str(m.output_control if m else 0), id="map-out-ctrl")
-                    yield Label("Value", classes="field-label")
-                    with RadioSet(id="map-out-val-mode"):
-                        yield RadioButton("Fixed", value=not m or m.output_value_mode == "fixed", id="val-fixed")
-                        yield RadioButton("Pass through", value=bool(m and m.output_value_mode == "passthrough"), id="val-passthrough")
-                    with Vertical(id="fixed-value-section", classes="visible" if (not m or m.output_value_mode == "fixed") else ""):
-                        yield Input(value=str(m.output_value if m else 127), id="map-out-val")
-
-            # -- Momentary row --
-            with Horizontal(classes="momentary-row"):
-                yield Label("Momentary: ", classes="field-label")
-                yield Switch(value=m.momentary if m else False, id="map-momentary")
-            with Vertical(id="momentary-section", classes="visible" if (m and m.momentary) else ""):
-                yield Label("Delay (ms)", classes="field-label")
-                yield Input(value=str(m.momentary_delay_ms if m else 100), id="map-delay")
-
-            with Horizontal(classes="buttons"):
-                yield Button("OK", variant="primary", id="ok")
-                yield Button("Cancel", id="cancel")
+                    with Horizontal(classes="sub-row"):
+                        with Vertical(classes="third-col"):
+                            yield Label("Type", classes="field-label")
+                            yield Select(MESSAGE_TYPES, value=m.output_type if m else "control_change", id="map-out-type")
+                        with Vertical(classes="third-col"):
+                            yield Label("Chan", classes="field-label")
+                            yield Input(value=str(m.output_channel if m else 1), id="map-out-ch")
+                        with Vertical(classes="third-col"):
+                            yield Label("CC/Note", classes="field-label")
+                            yield Input(value=str(m.output_control if m else 0), id="map-out-ctrl")
+                    with Horizontal(classes="sub-row"):
+                        with Vertical(classes="half-col"):
+                            yield Label("Value", classes="field-label")
+                            with RadioSet(id="map-out-val-mode"):
+                                yield RadioButton("Fixed", value=not m or m.output_value_mode == "fixed", id="val-fixed")
+                                yield RadioButton("Pass", value=bool(m and m.output_value_mode == "passthrough"), id="val-passthrough")
+                            with Vertical(id="fixed-value-section", classes="visible" if (not m or m.output_value_mode == "fixed") else ""):
+                                yield Input(value=str(m.output_value if m else 127), id="map-out-val")
+                        with Vertical(classes="half-col momentary-col"):
+                            yield Label("Momentary", classes="field-label")
+                            yield Switch(value=m.momentary if m else False, id="map-momentary")
+                            with Vertical(id="momentary-section", classes="visible" if (m and m.momentary) else ""):
+                                yield Label("Delay (ms)", classes="field-label")
+                                yield Input(value=str(m.momentary_delay_ms if m else 100), id="map-delay")
 
     def on_mount(self) -> None:
         self.query_one("#listen-btn", Button).tooltip = (
             "Click to capture the next incoming MIDI event and auto-fill the input fields"
         )
+        self.query_one("#map-in-ch", Input).tooltip = "Channel 1–16"
+        self.query_one("#map-out-ch", Input).tooltip = "Channel 1–16"
+        self._validate_ok()
+
+    def _validate_ok(self) -> None:
+        name = self.query_one("#map-name", Input).value.strip()
+        in_dev = self.query_one("#map-in-device", Select).value
+        out_dev = self.query_one("#map-out-device", Select).value
+        ok = bool(name and in_dev != Select.NULL and in_dev and out_dev != Select.NULL and out_dev)
+        self.query_one("#ok", Button).disabled = not ok
+
+    @on(Input.Changed, "#map-name")
+    def _name_changed(self) -> None:
+        self._validate_ok()
+
+    @on(Select.Changed, "#map-in-device")
+    @on(Select.Changed, "#map-out-device")
+    def _device_changed(self) -> None:
+        self._validate_ok()
 
     @on(Button.Pressed, "#listen-btn")
     @work
@@ -286,10 +319,13 @@ class MappingModal(ModalScreen[Mapping | None]):
         )
         self.dismiss(m)
 
-    @on(Button.Pressed, "#cancel")
-    def _cancel(self) -> None:
+    def action_cancel(self) -> None:
         cast(MidiBridgeApp, self.app).cancel_listen()
         self.dismiss(None)
+
+    @on(Button.Pressed, "#cancel")
+    def _cancel(self) -> None:
+        self.action_cancel()
 
 
 # ---------------------------------------------------------------------------
@@ -313,8 +349,9 @@ class DeviceRow(Horizontal):
 
 class DevicePanel(Vertical):
     def compose(self) -> ComposeResult:
-        yield Static("Devices", classes="panel-title")
-        yield Button("[+] Add Device", id="add-device", variant="success")
+        with Horizontal(classes="panel-header"):
+            yield Static("Devices", classes="panel-title")
+            yield Button("[+] Add", id="add-device", variant="success")
         yield Vertical(id="device-list")
 
     def refresh_devices(self, config: AppConfig) -> None:
@@ -325,32 +362,65 @@ class DevicePanel(Vertical):
 
 
 # ---------------------------------------------------------------------------
+# Mapping Row
+# ---------------------------------------------------------------------------
+
+class MappingRow(Horizontal):
+    class EditPressed(Message):
+        def __init__(self, idx: int) -> None:
+            super().__init__()
+            self.idx = idx
+
+    class DeletePressed(Message):
+        def __init__(self, idx: int) -> None:
+            super().__init__()
+            self.idx = idx
+
+    def __init__(self, idx: int, m: Mapping) -> None:
+        super().__init__(classes="mapping-row")
+        self._idx = idx
+        self._m = m
+
+    def compose(self) -> ComposeResult:
+        type_str = f"{_TYPE_ABBR.get(self._m.input_type, self._m.input_type)}→{_TYPE_ABBR.get(self._m.output_type, self._m.output_type)}"
+        yield Label(self._m.name, classes="map-col map-col-name")
+        yield Label(self._m.input_device, classes="map-col map-col-device")
+        yield Label(self._m.output_device, classes="map-col map-col-device")
+        yield Label(type_str, classes="map-col map-col-type")
+        yield Button("Edit", classes="map-edit-btn", variant="primary")
+        yield Button("✕", classes="map-del-btn", variant="error")
+
+    @on(Button.Pressed, ".map-edit-btn")
+    def _edit(self) -> None:
+        self.post_message(self.EditPressed(self._idx))
+
+    @on(Button.Pressed, ".map-del-btn")
+    def _delete(self) -> None:
+        self.post_message(self.DeletePressed(self._idx))
+
+
+# ---------------------------------------------------------------------------
 # Mapping Panel
 # ---------------------------------------------------------------------------
 
 class MappingPanel(Vertical):
     def compose(self) -> ComposeResult:
-        yield Static("Mappings", classes="panel-title")
-        yield Button("[+] Add Mapping", id="add-mapping", variant="success")
-        yield DataTable(id="mapping-table", show_cursor=True)
-
-    def on_mount(self) -> None:
-        table = self.query_one("#mapping-table", DataTable)
-        table.add_columns("Name", "Input Device", "Output Device", "Type", "✏", "✕")
+        with Horizontal(classes="panel-header"):
+            yield Static("Mappings", classes="panel-title")
+            yield Button("[+] Add", id="add-mapping", variant="success")
+        with Horizontal(classes="mapping-col-header"):
+            yield Static("Name", classes="map-col map-col-name")
+            yield Static("Input", classes="map-col map-col-device")
+            yield Static("Output", classes="map-col map-col-device")
+            yield Static("Type", classes="map-col map-col-type")
+            yield Static("", classes="map-action-spacer")
+        yield VerticalScroll(id="mapping-list")
 
     def refresh_mappings(self, config: AppConfig) -> None:
-        table = self.query_one("#mapping-table", DataTable)
-        table.clear()
+        container = self.query_one("#mapping-list", VerticalScroll)
+        container.remove_children()
         for i, m in enumerate(config.mappings):
-            table.add_row(
-                m.name,
-                m.input_device,
-                m.output_device,
-                f"{_TYPE_ABBR.get(m.input_type, m.input_type)}→{_TYPE_ABBR.get(m.output_type, m.output_type)}",
-                "[Edit]",
-                "[X]",
-                key=str(i),
-            )
+            container.mount(MappingRow(i, m))
 
 
 # ---------------------------------------------------------------------------
@@ -510,27 +580,23 @@ class MidiBridgeApp(App):
             new_devices = {k: v for k, v in self._config.devices.items() if k != name}
             self._update_config(AppConfig(devices=new_devices, mappings=list(self._config.mappings)))
 
-    @on(DataTable.CellSelected, "#mapping-table")
+    @on(MappingRow.EditPressed)
     @work
-    async def _mapping_table_cell(self, event: DataTable.CellSelected) -> None:
-        table = self.query_one("#mapping-table", DataTable)
-        row_key = event.cell_key.row_key.value
-        col_index = event.coordinate.column
+    async def _edit_mapping(self, event: MappingRow.EditPressed) -> None:
+        idx = event.idx
+        existing = self._config.mappings[idx]
+        result: Mapping | None = await self.push_screen_wait(MappingModal(self._config, existing))
+        if result is None:
+            return
+        new_mappings = list(self._config.mappings)
+        new_mappings[idx] = result
+        self._update_config(AppConfig(devices=dict(self._config.devices), mappings=new_mappings))
 
-        # Column 4 = Edit, Column 5 = Delete
-        if col_index == 4:
-            idx = int(row_key)
-            existing = self._config.mappings[idx]
-            result: Mapping | None = await self.push_screen_wait(MappingModal(self._config, existing))
-            if result is None:
-                return
-            new_mappings = list(self._config.mappings)
-            new_mappings[idx] = result
-            self._update_config(AppConfig(devices=dict(self._config.devices), mappings=new_mappings))
-        elif col_index == 5:
-            idx = int(row_key)
-            new_mappings = [m for i, m in enumerate(self._config.mappings) if i != idx]
-            self._update_config(AppConfig(devices=dict(self._config.devices), mappings=new_mappings))
+    @on(MappingRow.DeletePressed)
+    def _delete_mapping(self, event: MappingRow.DeletePressed) -> None:
+        idx = event.idx
+        new_mappings = [m for i, m in enumerate(self._config.mappings) if i != idx]
+        self._update_config(AppConfig(devices=dict(self._config.devices), mappings=new_mappings))
 
     # ------------------------------------------------------------------
     # Key actions
