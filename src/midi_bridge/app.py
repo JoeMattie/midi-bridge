@@ -453,6 +453,232 @@ class MonitorPanel(Vertical):
         log.write(line)
 
 
+# ---------------------------------------------------------------------------
+# Mapping Monitor Panel (condensed view)
+# ---------------------------------------------------------------------------
+
+class MappingMonitorPanel(Vertical):
+    """Condensed monitor showing one line per mapping, updated in-place."""
+
+    _refresh_gen: int = 0
+
+    def compose(self) -> ComposeResult:
+        yield Static("Mapping Monitor", classes="panel-title")
+        yield Vertical(id="mapping-monitor-list")
+
+    def refresh_rows(self, config: AppConfig) -> None:
+        self._refresh_gen += 1
+        gen = self._refresh_gen
+        container = self.query_one("#mapping-monitor-list", Vertical)
+        container.remove_children()
+        self._name_to_id: dict[str, str] = {}
+        for i, m in enumerate(config.mappings):
+            widget_id = f"mm-{gen}-{i}"
+            self._name_to_id[m.name] = widget_id
+            container.mount(Static("", id=widget_id, classes="mapping-monitor-row"))
+        self._update_all_idle(config)
+
+    def _update_all_idle(self, config: AppConfig) -> None:
+        for m in config.mappings:
+            widget_id = self._name_to_id.get(m.name)
+            if not widget_id:
+                continue
+            try:
+                row = self.query_one(f"#{widget_id}", Static)
+            except Exception:
+                continue
+            type_str = f"{_TYPE_ABBR.get(m.input_type, m.input_type)}→{_TYPE_ABBR.get(m.output_type, m.output_type)}"
+            row.update(
+                f"[dim]--:--:--[/dim]  "
+                f"[white]{m.name:<20}[/white]  "
+                f"[dim]{type_str}[/dim]  "
+                f"[dim]waiting…[/dim]"
+            )
+
+    def log_event(self, event: MidiEvent) -> None:
+        if not event.matched or not event.mapping_name:
+            return
+        widget_id = getattr(self, "_name_to_id", {}).get(event.mapping_name)
+        if not widget_id:
+            return
+        try:
+            row = self.query_one(f"#{widget_id}", Static)
+        except Exception:
+            return
+
+        ts = time.strftime("%H:%M:%S", time.localtime(event.timestamp))
+        msg = event.message
+        details = _format_msg_short(msg)
+
+        if event.direction == "IN":
+            color = "cyan"
+        else:
+            color = "green"
+
+        row.update(
+            f"[dim]{ts}[/dim]  "
+            f"[bold white]{event.mapping_name:<20}[/bold white]  "
+            f"[{color}]{event.direction:3}[/{color}]  "
+            f"{details}"
+        )
+
+
+def _format_msg_short(msg: mido.Message) -> str:
+    t = msg.type
+    if t == "program_change":
+        return f"[yellow]PC[/yellow] ch={msg.channel + 1} prog={msg.program}"
+    elif t == "control_change":
+        return f"[magenta]CC[/magenta] ch={msg.channel + 1} ctrl={msg.control} val={msg.value}"
+    elif t in ("note_on", "note_off"):
+        label = "NOn" if t == "note_on" else "NOff"
+        return f"[blue]{label}[/blue] ch={msg.channel + 1} note={msg.note} vel={msg.velocity}"
+    elif t == "sysex":
+        raw = bytes(msg.data[:8]).hex()
+        return f"[red]SysEx[/red] {raw}{'…' if len(msg.data) > 8 else ''}"
+    else:
+        return str(msg)
+
+
+# ---------------------------------------------------------------------------
+# Compact Monitor Panel (small mode — combined IN+OUT on one line)
+# ---------------------------------------------------------------------------
+
+_COMPACT_TYPE_ABBR = {
+    "program_change": "PC",
+    "control_change": "CC",
+    "note_on": "NOn",
+    "note_off": "NOff",
+    "sysex": "SysEx",
+}
+
+
+def _compact_input_str(msg: mido.Message) -> str:
+    """Format input side: TYPE:ch.value"""
+    abbr = _COMPACT_TYPE_ABBR.get(msg.type, msg.type)
+    if msg.type == "program_change":
+        return f"{abbr}:{msg.channel + 1}.{msg.program}"
+    elif msg.type == "control_change":
+        return f"{abbr}:{msg.channel + 1}.{msg.control}"
+    elif msg.type in ("note_on", "note_off"):
+        return f"{abbr}:{msg.channel + 1}.{msg.note}"
+    elif msg.type == "sysex":
+        return abbr
+    return abbr
+
+
+def _compact_output_str(msg: mido.Message, out_values: list[int]) -> str:
+    """Format output side: TYPE:ctrl.[val,...] or TYPE:ch.prog"""
+    abbr = _COMPACT_TYPE_ABBR.get(msg.type, msg.type)
+    if msg.type == "control_change":
+        vals = ",".join(str(v) for v in out_values) if out_values else str(msg.value)
+        return f"{abbr}:{msg.control}.[{vals}]"
+    elif msg.type == "program_change":
+        return f"{abbr}:{msg.channel + 1}.{msg.program}"
+    elif msg.type in ("note_on", "note_off"):
+        vals = ",".join(str(v) for v in out_values) if out_values else str(msg.velocity)
+        return f"{abbr}:{msg.note}.[{vals}]"
+    elif msg.type == "sysex":
+        return abbr
+    return abbr
+
+
+class _PendingCompactLine:
+    """Buffers a matched IN event and its associated OUT values."""
+    __slots__ = ("timestamp", "in_device", "in_msg", "out_device", "out_msg", "out_values", "timer_handle")
+
+    def __init__(self, timestamp: float, in_device: str, in_msg: mido.Message) -> None:
+        self.timestamp = timestamp
+        self.in_device = in_device
+        self.in_msg = in_msg
+        self.out_device: str | None = None
+        self.out_msg: mido.Message | None = None
+        self.out_values: list[int] = []
+        self.timer_handle: asyncio.TimerHandle | None = None
+
+
+def _extract_out_value(msg: mido.Message) -> int:
+    t = msg.type
+    if t == "control_change":
+        return msg.value
+    elif t == "program_change":
+        return msg.program
+    elif t in ("note_on", "note_off"):
+        return msg.velocity
+    return 0
+
+
+class CompactMonitorPanel(Vertical):
+    """Small-mode monitor: one line per mapping trigger, IN+OUT combined."""
+
+    _FLUSH_DELAY = 0.5  # seconds to wait for momentary follow-ups
+
+    def compose(self) -> ComposeResult:
+        yield RichLog(id="compact-log", highlight=True, markup=True, auto_scroll=True)
+
+    def on_mount(self) -> None:
+        self._pending: dict[str, _PendingCompactLine] = {}
+
+    def log_event(self, event: MidiEvent) -> None:
+        if not event.matched or not event.mapping_name:
+            return
+
+        name = event.mapping_name
+
+        if event.direction == "IN":
+            # Flush any existing pending line for this mapping
+            if name in self._pending:
+                self._flush(name)
+            pending = _PendingCompactLine(event.timestamp, event.device_name, event.message)
+            self._pending[name] = pending
+            self._schedule_flush(name)
+        elif event.direction == "OUT" and name in self._pending:
+            pending = self._pending[name]
+            pending.out_device = event.device_name
+            pending.out_msg = event.message
+            pending.out_values.append(_extract_out_value(event.message))
+            # Reset flush timer to wait for more OUT events (momentary)
+            self._schedule_flush(name)
+
+    def _schedule_flush(self, name: str) -> None:
+        pending = self._pending.get(name)
+        if not pending:
+            return
+        if pending.timer_handle is not None:
+            pending.timer_handle.cancel()
+        loop = asyncio.get_running_loop()
+        pending.timer_handle = loop.call_later(self._FLUSH_DELAY, self._flush, name)
+
+    def _flush(self, name: str) -> None:
+        pending = self._pending.pop(name, None)
+        if not pending:
+            return
+        if pending.timer_handle is not None:
+            pending.timer_handle.cancel()
+
+        ts = time.strftime("%H:%M:%S", time.localtime(pending.timestamp))
+        in_str = _compact_input_str(pending.in_msg)
+
+        if pending.out_msg is not None:
+            out_str = _compact_output_str(pending.out_msg, pending.out_values)
+            line = (
+                f"[dim]{ts}[/dim] "
+                f"[cyan]{pending.in_device}[/cyan] "
+                f"[white]{in_str}[/white]"
+                f" -> "
+                f"[green]{pending.out_device}[/green] "
+                f"[white]{out_str}[/white]"
+            )
+        else:
+            # IN only, no output arrived
+            line = (
+                f"[dim]{ts}[/dim] "
+                f"[cyan]{pending.in_device}[/cyan] "
+                f"[white]{in_str}[/white]"
+            )
+
+        self.query_one("#compact-log", RichLog).write(line)
+
+
 def _format_msg(msg: mido.Message) -> str:
     t = msg.type
     if t == "program_change":
@@ -478,6 +704,8 @@ class MidiBridgeApp(App):
     BINDINGS = [
         Binding("s", "save_config", "Save"),
         Binding("c", "clear_monitor", "Clear Monitor"),
+        Binding("v", "toggle_view", "Toggle View"),
+        Binding("t", "toggle_compact", "Compact"),
         Binding("q", "quit", "Quit"),
     ]
 
@@ -506,6 +734,8 @@ class MidiBridgeApp(App):
             yield DevicePanel(id="device-panel")
             yield MappingPanel(id="mapping-panel")
         yield MonitorPanel(id="monitor-panel")
+        yield MappingMonitorPanel(id="mapping-monitor-panel")
+        yield CompactMonitorPanel(id="compact-monitor-panel")
         yield Footer()
 
     # ------------------------------------------------------------------
@@ -517,6 +747,8 @@ class MidiBridgeApp(App):
 
     def _post_midi_event(self, event: MidiEvent) -> None:
         self.query_one("#monitor-panel", MonitorPanel).log_event(event)
+        self.query_one("#mapping-monitor-panel", MappingMonitorPanel).log_event(event)
+        self.query_one("#compact-monitor-panel", CompactMonitorPanel).log_event(event)
         if (
             event.direction == "IN"
             and self._listen_future is not None
@@ -543,6 +775,7 @@ class MidiBridgeApp(App):
     def _refresh_panels(self) -> None:
         self.query_one("#device-panel", DevicePanel).refresh_devices(self._config)
         self.query_one("#mapping-panel", MappingPanel).refresh_mappings(self._config)
+        self.query_one("#mapping-monitor-panel", MappingMonitorPanel).refresh_rows(self._config)
 
     def _update_config(self, config: AppConfig) -> None:
         self._config = config
@@ -605,6 +838,41 @@ class MidiBridgeApp(App):
     def action_save_config(self) -> None:
         save_config(self._config, self._config_path)
         self.notify(f"Saved to {self._config_path}", title="Saved")
+
+    def action_toggle_view(self) -> None:
+        monitor = self.query_one("#monitor-panel", MonitorPanel)
+        mapping_monitor = self.query_one("#mapping-monitor-panel", MappingMonitorPanel)
+        if monitor.display:
+            monitor.display = False
+            mapping_monitor.display = True
+        else:
+            monitor.display = True
+            mapping_monitor.display = False
+
+    def action_toggle_compact(self) -> None:
+        compact = self.query_one("#compact-monitor-panel", CompactMonitorPanel)
+        monitor = self.query_one("#monitor-panel")
+        mapping_monitor = self.query_one("#mapping-monitor-panel")
+        is_compact = compact.display
+
+        if not is_compact:
+            # Entering compact: remember which monitor was active
+            self._pre_compact_monitor = monitor.display
+            self._pre_compact_mapping = mapping_monitor.display
+            compact.display = True
+            self.query_one(Header).display = False
+            self.query_one("#top-row").display = False
+            monitor.display = False
+            mapping_monitor.display = False
+            self.query_one(Footer).display = False
+        else:
+            # Leaving compact: restore previous state
+            compact.display = False
+            self.query_one(Header).display = True
+            self.query_one("#top-row").display = True
+            self.query_one(Footer).display = True
+            monitor.display = getattr(self, "_pre_compact_monitor", True)
+            mapping_monitor.display = getattr(self, "_pre_compact_mapping", False)
 
     def action_clear_monitor(self) -> None:
         self.query_one("#monitor-log", RichLog).clear()

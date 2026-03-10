@@ -17,6 +17,7 @@ class MidiEvent:
     device_name: str
     message: mido.Message
     matched: bool = False
+    mapping_name: str | None = None
 
 
 EventCallback = Callable[[MidiEvent], None]
@@ -152,7 +153,7 @@ class MidiEngine:
                 continue
 
             matched_any = True
-            self._fire_event(device_name, msg, matched=True)
+            self._fire_event(device_name, msg, matched=True, mapping_name=mapping.name)
             self._send_output(mapping, msg)
             return  # fire IN event once even if multiple mappings match first
 
@@ -209,17 +210,17 @@ class MidiEngine:
             print(f"[engine] send error: {exc}")
             return
 
-        self._fire_event(mapping.output_device, out_msg, matched=True, direction="OUT")
+        self._fire_event(mapping.output_device, out_msg, matched=True, direction="OUT", mapping_name=mapping.name)
 
         if mapping.momentary:
             delay_s = mapping.momentary_delay_ms / 1000.0
             follow_up = self._build_zero_message(mapping)
             if follow_up is not None:
-                t = threading.Timer(delay_s, self._send_follow_up, args=(mapping.output_device, follow_up))
+                t = threading.Timer(delay_s, self._send_follow_up, args=(mapping.name, mapping.output_device, follow_up))
                 t.daemon = True
                 t.start()
 
-    def _send_follow_up(self, device_name: str, msg: mido.Message) -> None:
+    def _send_follow_up(self, mapping_name: str, device_name: str, msg: mido.Message) -> None:
         with self._lock:
             out_port = self._output_ports.get(device_name)
         if out_port is None:
@@ -228,7 +229,7 @@ class MidiEngine:
             out_port.send(msg)
         except Exception:
             pass
-        self._fire_event(device_name, msg, matched=True, direction="OUT")
+        self._fire_event(device_name, msg, matched=True, direction="OUT", mapping_name=mapping_name)
 
     def _build_output_message(self, mapping: Mapping, incoming: mido.Message) -> mido.Message | None:
         ch = mapping.output_channel - 1  # mido is 0-based
@@ -278,13 +279,14 @@ class MidiEngine:
             pass
         return None
 
-    def _fire_event(self, device_name: str, msg: mido.Message, matched: bool, direction: str = "IN") -> None:
+    def _fire_event(self, device_name: str, msg: mido.Message, matched: bool, direction: str = "IN", mapping_name: str | None = None) -> None:
         event = MidiEvent(
             timestamp=time.time(),
             direction=direction,
             device_name=device_name,
             message=msg,
             matched=matched,
+            mapping_name=mapping_name,
         )
         try:
             self._on_event(event)

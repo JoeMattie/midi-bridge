@@ -133,6 +133,34 @@ MonitorPanel RichLog {
 }
 
 /* ----------------------------------------------------------------
+   Mapping Monitor Panel (condensed view)
+   ---------------------------------------------------------------- */
+
+MappingMonitorPanel {
+    border: solid $primary;
+    height: 12;
+    padding: 0 1;
+    display: none;
+}
+
+.mapping-monitor-row {
+    height: 1;
+}
+
+/* ----------------------------------------------------------------
+   Compact Monitor Panel (small mode)
+   ---------------------------------------------------------------- */
+
+CompactMonitorPanel {
+    height: 1fr;
+    display: none;
+}
+
+CompactMonitorPanel RichLog {
+    height: 1fr;
+}
+
+/* ----------------------------------------------------------------
    Device Modal
    ---------------------------------------------------------------- */
 
